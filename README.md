@@ -35,7 +35,7 @@ The orchestrator manages a state machine: `IDLE → LISTENING → DETECTING → 
 
 ## Requirements
 
-- **macOS** with Apple Silicon (M1/M2/M3/M4)
+- **macOS** with Apple Silicon (M4)
 - **32GB+ RAM recommended** (24GB works but tight — ASR and TTS share GPU memory)
 - **Python 3.11+**
 - **BlackHole 2ch** — virtual audio driver
@@ -47,7 +47,23 @@ The orchestrator manages a state machine: `IDLE → LISTENING → DETECTING → 
 
 If you're RAM-constrained (24GB), you can offload Ollama to a second Mac on your local network:
 - **Primary Mac**: voxtral.c (ASR) + VoiceBox (TTS) + audio capture
-- **Secondary Mac**: Ollama (LLM) — just update `llm.base_url` in config
+- **Secondary Mac**: Ollama (LLM)
+
+On the secondary Mac:
+```bash
+# Install and start Ollama
+brew install ollama
+ollama pull qwen3:8b
+
+# Ollama binds to localhost by default. To expose it on your network:
+OLLAMA_HOST=0.0.0.0 ollama serve
+```
+
+Then in your `config.yaml` on the primary Mac, point to the secondary machine's IP:
+```yaml
+llm:
+  base_url: "http://192.168.1.x:11434"  # your secondary Mac's local IP
+```
 
 ## Setup
 
