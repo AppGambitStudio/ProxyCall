@@ -24,12 +24,18 @@ Google Meet Audio → BlackHole → Voxtral ASR → Intent Classifier → LLM Re
 │  (audio in)  │     │  (ASR)        │     │  Buffer      │
 └──────────────┘     └───────────────┘     └──────┬───────┘
                                                   │
-                                                  ▼
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Speakers    │◀────│  VoiceBox    │◀────│  Qwen3 LLM   │
-│  (audio out) │     │  (TTS)       │     │  (brain)     │
-└──────────────┘     └──────────────┘     └──────────────┘
+                     ┌───────────────┐            │
+                     │  Meeting      │            │
+                     │  Context (.md)│────┐       │
+                     └───────────────┘    │       │
+                                          ▼       ▼
+┌──────────────┐     ┌──────────────┐  ┌──────────────┐
+│  Speakers    │◀────│  VoiceBox    │◀─│  Qwen3 LLM   │
+│  (audio out) │     │  (TTS)       │  │  (brain)     │
+└──────────────┘     └──────────────┘  └──────────────┘
 ```
+
+The meeting context file feeds your prep notes (status updates, positions, communication style) into the LLM so responses are relevant to the actual conversation.
 
 The orchestrator manages a state machine: `IDLE → LISTENING → DETECTING → THINKING → SPEAKING → IDLE`
 
