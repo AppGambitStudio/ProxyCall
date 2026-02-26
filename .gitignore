@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+
+# Audio test files
+*.wav
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Voice samples (may contain personal voice data)
+voice_samples/
+
+# Vendor (clone and build separately — see README)
+vendor/
+
+# Config with personal settings (template provided as config.example.yaml)
+config.yaml
+
+# Meetings
+meetings/current.md
