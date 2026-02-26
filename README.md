@@ -1,6 +1,6 @@
 # ProxyCall
 
-A local AI agent that attends your Google Meet calls, listens to conversations, and responds in your cloned voice. Everything runs locally on Apple Silicon — no cloud APIs, no data leaves your machine.
+A local AI agent that attends your Google Meet calls, listens to conversations, and responds in your cloned voice. All AI inference runs locally on Apple Silicon — no cloud APIs for transcription, LLM, or voice synthesis. The only thing that leaves your machine is the audio going through Google Meet (obviously).
 
 > **Disclaimer:** This is a fun experimental project built and tested only on Apple Silicon Macs (M4). It's not production-ready, will occasionally say odd things, and the latency is noticeable. Use it to amuse yourself, not to fool your boss.
 
