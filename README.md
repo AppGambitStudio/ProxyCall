@@ -1,6 +1,8 @@
-# ProxyCall
+# 🧑‍💻 ProxyCall
 
-A local AI agent that attends your Google Meet calls, listens to conversations, and responds in your cloned voice. All AI inference runs locally on Apple Silicon — no cloud APIs for transcription, LLM, or voice synthesis. The only thing that leaves your machine is the audio going through Google Meet (obviously).
+A local AI agent that attends your calls, listens to conversations, and responds in your cloned voice. All AI inference runs locally on Apple Silicon — no cloud APIs for transcription, LLM, or voice synthesis.
+
+Works with **any application** that outputs audio — Google Meet, Zoom, Teams, Discord, FaceTime, or anything else. Just route the app's audio through BlackHole and the agent picks it up. Google Meet is used as a reference throughout this README, but the agent is app-agnostic.
 
 > **Disclaimer:** This is a fun experimental project built and tested only on Apple Silicon Macs (M4). It's not production-ready, will occasionally say odd things, and the latency is noticeable. Use it to amuse yourself, not to fool your boss.
 
