@@ -36,6 +36,7 @@ class VoxtralASR:
         self._write_buffer = bytearray()  # batch small chunks before writing
         self._write_threshold = 16000 * 2  # 1 second of s16le audio (16kHz * 2 bytes)
         self._warming_up = False
+        self._model_ready = asyncio.Event()
 
     def on_transcript(self, callback):
         """Register a callback for new transcript text."""
@@ -50,7 +51,6 @@ class VoxtralASR:
             self.binary_path,
             "-d", self.model_path,
             "--stdin",
-            "--silent",
             "-I", str(self.processing_interval),
         ]
         logger.info("Starting voxtral: %s", " ".join(cmd))
@@ -62,22 +62,20 @@ class VoxtralASR:
             stderr=asyncio.subprocess.PIPE,
         )
         self._write_buffer.clear()  # clear stale audio from before stop
+        self._model_ready.clear()
         self._warming_up = True  # ignore audio during model load
         self._running = True
 
         # Start reading stdout in background
         asyncio.create_task(self._read_stdout())
         asyncio.create_task(self._read_stderr())
-        # Warmup: give voxtral time to load model before accepting audio
-        asyncio.create_task(self._finish_warmup())
 
-        logger.info("Voxtral ASR started (pid=%d)", self._process.pid)
+        logger.info("Voxtral ASR started (pid=%d), waiting for model load...", self._process.pid)
 
-    async def _finish_warmup(self):
-        """Wait for model load before accepting audio."""
-        await asyncio.sleep(3)
-        self._warming_up = False
-        logger.info("Voxtral ASR ready (warmup complete)")
+    async def wait_ready(self):
+        """Wait until the model is fully loaded. Call after start()."""
+        await self._model_ready.wait()
+        logger.info("Voxtral ASR ready")
 
     async def _read_stdout(self):
         """Read transcript tokens from stdout."""
@@ -99,7 +97,7 @@ class VoxtralASR:
                 logger.exception("Error reading voxtral stdout")
 
     async def _read_stderr(self):
-        """Log stderr output from voxtral."""
+        """Log stderr output from voxtral, detect model loaded."""
         try:
             while self._running and self._process:
                 data = await self._process.stderr.read(4096)
@@ -108,6 +106,9 @@ class VoxtralASR:
                 text = data.decode("utf-8", errors="replace").strip()
                 if text:
                     logger.debug("Voxtral stderr: %s", text)
+                    if "Model loaded" in text:
+                        self._warming_up = False
+                        self._model_ready.set()
         except Exception:
             pass
 

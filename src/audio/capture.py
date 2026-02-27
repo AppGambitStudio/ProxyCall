@@ -110,8 +110,14 @@ class AudioCapture:
             return
 
         if self.device is None:
-            self.device = find_blackhole("input")
-            logger.info("Using BlackHole device index: %d", self.device)
+            try:
+                self.device = find_blackhole("input")
+                logger.info("Using BlackHole device index: %d", self.device)
+            except RuntimeError:
+                logger.warning(
+                    "BlackHole not found — falling back to default input device (mic)"
+                )
+                self.device = sd.default.device[0]
 
         # Query native sample rate and channels from device
         info = sd.query_devices(self.device)

@@ -4,6 +4,13 @@ A local AI agent that attends your Google Meet calls, listens to conversations, 
 
 > **Disclaimer:** This is a fun experimental project built and tested only on Apple Silicon Macs (M4). It's not production-ready, will occasionally say odd things, and the latency is noticeable. Use it to amuse yourself, not to fool your boss.
 
+## Demo
+
+<!-- Replace VIDEO_URL with your CloudFront URL -->
+[![Alt Text for Video](./docs/demo-thumbnail.png)](https://dnwemruvsme5t.cloudfront.net/projects/ProxyCall-Demo.mp4)
+
+
+
 ## How It Works
 
 ```
@@ -11,9 +18,9 @@ Google Meet Audio → BlackHole → Voxtral ASR → Intent Classifier → LLM Re
 ```
 
 1. **Audio Capture** — Routes Google Meet audio through [BlackHole](https://existential.audio/blackhole/) virtual audio device
-2. **Speech-to-Text** — [voxtral.c](https://github.com/nicholasgasior/voxtral.c) (Mistral's Voxtral Realtime 4B) transcribes speech in real-time
-3. **Intent Detection** — Local LLM via [Ollama](https://ollama.com) decides if the utterance needs a response
-4. **Response Generation** — Same LLM generates a contextual response using your meeting prep notes
+2. **Speech-to-Text** — [voxtral.c](https://github.com/antirez/voxtral.c) (Mistral's Voxtral Realtime 4B) transcribes speech in real-time
+3. **Intent Detection** — Local LLM via [Ollama](https://ollama.com) decides if the utterance needs a response (greeting, question, sign-off, etc.)
+4. **Response Generation** — Same LLM generates a contextual response using your meeting prep notes, handling noisy ASR by inferring intent from context
 5. **Voice Synthesis** — [VoiceBox](https://voicebox.sh) clones your voice and speaks the response through your speakers
 
 ## Architecture
@@ -21,7 +28,7 @@ Google Meet Audio → BlackHole → Voxtral ASR → Intent Classifier → LLM Re
 ```
 ┌──────────────┐     ┌───────────────┐     ┌──────────────┐
 │  BlackHole   │────▶│  voxtral.c    │────▶│  Transcript  │
-│  (audio in)  │     │  (ASR)        │     │  Buffer      │
+│  16ch        │     │  (ASR)        │     │  Buffer      │
 └──────────────┘     └───────────────┘     └──────┬───────┘
                                                   │
                      ┌───────────────┐            │
@@ -30,21 +37,23 @@ Google Meet Audio → BlackHole → Voxtral ASR → Intent Classifier → LLM Re
                      └───────────────┘    │       │
                                           ▼       ▼
 ┌──────────────┐     ┌──────────────┐  ┌──────────────┐
-│  Speakers    │◀────│  VoiceBox    │◀─│  Qwen3 LLM   │
+│  Speakers    │◀────│  VoiceBox    │◀─│  Ollama LLM  │
 │  (audio out) │     │  (TTS)       │  │  (brain)     │
 └──────────────┘     └──────────────┘  └──────────────┘
 ```
 
-The meeting context file feeds your prep notes (status updates, positions, communication style) into the LLM so responses are relevant to the actual conversation.
-
 The orchestrator manages a state machine: `IDLE → LISTENING → DETECTING → THINKING → SPEAKING → IDLE`
+
+The terminal UI shows two live panels:
+- **Live Transcript** — real-time ASR output from the call
+- **Conversation Log** — full dialogue (Colleague/You), pipeline status, and intent decisions
 
 ## Requirements
 
-- **macOS** with Apple Silicon (M4)
-- **32GB+ RAM recommended** (24GB works but tight — ASR and TTS share GPU memory)
+- **macOS** with Apple Silicon (M4 recommended)
+- **24GB+ RAM** (runs everything locally but tight — 48-64GB recommended)
 - **Python 3.11+**
-- **BlackHole 2ch** — virtual audio driver
+- **BlackHole 16ch** — virtual audio driver
 - **Ollama** — local LLM server
 - **VoiceBox** — voice cloning TTS app
 - **voxtral.c** — compiled from source (see below)
@@ -57,19 +66,18 @@ If you're RAM-constrained (24GB), you can offload Ollama to a second Mac on your
 
 On the secondary Mac:
 ```bash
-# Install and start Ollama
 brew install ollama
 ollama pull qwen3:8b
-
-# Ollama binds to localhost by default. To expose it on your network:
 OLLAMA_HOST=0.0.0.0 ollama serve
 ```
 
-Then in your `config.yaml` on the primary Mac, point to the secondary machine's IP:
+Then in your `config.yaml` on the primary Mac:
 ```yaml
 llm:
   base_url: "http://192.168.1.x:11434"  # your secondary Mac's local IP
 ```
+
+> **Note:** Intermittent "No route to host" errors can occur with remote Ollama over WiFi. The agent has built-in retry logic (3 attempts), but for reliability, running Ollama locally is recommended.
 
 ## Setup
 
@@ -77,11 +85,11 @@ llm:
 
 ```bash
 # BlackHole virtual audio driver
-brew install blackhole-2ch
+brew install blackhole-16ch
 
 # Ollama
 brew install ollama
-ollama pull qwen3:8b  # or: llama3.1:8b, phi4-mini, gemma3:4b
+ollama pull llama3.1:8b  # or: qwen3:8b, phi4-mini, gemma3:4b
 
 # VoiceBox — download from https://voicebox.sh
 # After install, create a voice profile by recording a ~30s sample of your voice
@@ -95,28 +103,22 @@ pip install -r requirements.txt
 ### 2. Build voxtral.c (ASR Engine)
 
 ```bash
-# Clone into vendor directory
 mkdir -p vendor
-git clone https://github.com/nicholasgasior/voxtral.c.git vendor/voxtral.c
+git clone https://github.com/antirez/voxtral.c.git vendor/voxtral.c
 cd vendor/voxtral.c
 
-# Build (requires Xcode Command Line Tools)
-make
+make       # requires Xcode Command Line Tools
+./download_model.sh  # ~2GB model weights
 
-# Download model weights (~2GB)
-./download_model.sh
-
-# Verify it works
+# Verify
 ./voxtral -d voxtral-model samples/jfk.wav
 
 cd ../..
 ```
 
-> See the [voxtral.c README](https://github.com/nicholasgasior/voxtral.c) for detailed build instructions and troubleshooting.
-
 ### 3. Configure Audio Routing
 
-1. Set your **macOS system sound output** to `BlackHole 2ch`
+1. Set your **macOS system sound output** to `BlackHole 16ch`
 2. In **Google Meet**, Chrome will use the system default output (BlackHole)
 3. The agent captures from BlackHole and plays responses through your actual speakers
 
@@ -131,9 +133,11 @@ cp config.example.yaml config.yaml
 Edit `config.yaml`:
 - `agent.name` — your name
 - `agent.trigger_names` — add common ASR misrecognitions of your name
+- `audio.capture_device` — `"BlackHole 16ch"`
 - `audio.playback_device` — your speaker device name
+- `llm.model` — Ollama model name
 - `llm.base_url` — Ollama URL (localhost or remote machine)
-- `tts.voice_profile_id` — your VoiceBox voice profile ID (leave empty to auto-detect)
+- `tts.voice_profile_id` — your VoiceBox voice profile ID
 
 ### 5. Prepare Meeting Context
 
@@ -172,20 +176,52 @@ The better your prep, the better the responses. The agent will say "let me get b
 ```bash
 source .venv/bin/activate
 
-# Run with debug logging (recommended for first run)
-python -m src.main --no-ui --debug
+# Run with terminal UI (recommended)
+python -m src.main
+
+# Run with debug logging (first run)
+python -m src.main --debug
 
 # Watch the pipeline in another terminal
 tail -f voiceagent.log
 
-# Run with terminal UI
-python -m src.main
-
 # Listen-only mode (transcribe but don't respond)
 python -m src.main --listen-only
 
+# No UI mode (prints transcript to stdout)
+python -m src.main --no-ui
+
 # Custom meeting context
 python -m src.main --meeting meetings/my-standup.md
+```
+
+### Terminal UI
+
+The agent runs a live Rich terminal dashboard with:
+
+```
+┌─ Voice Agent ────────────────────────────────┐
+│ Status: LISTENING      [M]ute [F]orce [S]kip [Q]uit │
+├──────────────────────────────────────────────┤
+│ Live Transcript (ASR)                         │
+│ Hey good morning, how's the project going?    │
+├───────────────────────────────────────────────┤
+│ Conversation Log                              │
+│ >> All systems ready — waiting for colleague  │
+│ Colleague: Hey good morning, how's the        │
+│   project going?                              │
+│ >> Silence detected, analyzing intent...      │
+│ >> Classifying intent via LLM...              │
+│ >> Responding to: greeting + project status   │
+│ >> Generating response via LLM...             │
+│ >> Synthesizing voice...                      │
+│ You: Good morning! The API refactor shipped   │
+│   to staging Wednesday, all green so far.     │
+│ >> Waiting for colleague to speak...          │
+├───────────────────────────────────────────────┤
+│ Meeting: Weekly Sync | Latency: Intent 2.1s   │
+│   LLM 3.4s  TTS 8.2s                          │
+└───────────────────────────────────────────────┘
 ```
 
 ### Keyboard Controls
@@ -202,23 +238,22 @@ python -m src.main --meeting meetings/my-standup.md
 ```
 src/
 ├── main.py              # CLI entry point
-├── orchestrator.py      # Central state machine
+├── orchestrator.py       # Central state machine + pipeline
 ├── audio/
 │   ├── capture.py       # BlackHole audio capture (48kHz→16kHz resampling)
 │   ├── devices.py       # Audio device discovery
 │   └── playback.py      # Speaker output
 ├── asr/
-│   └── voxtral.py       # voxtral.c subprocess wrapper
+│   └── voxtral.py       # voxtral.c subprocess wrapper (stdin/stdout)
 ├── brain/
 │   ├── context.py       # Meeting markdown parser
-│   ├── intent.py        # "Does this need a response?" classifier
+│   ├── intent.py        # Intent classifier with retry logic
 │   ├── gate.py          # Confidence threshold gate
-│   └── responder.py     # Response generator
+│   └── responder.py     # Response generator with retry logic
 ├── transcript/
 │   └── buffer.py        # Rolling transcript buffer
 ├── voice/
-│   ├── tts.py           # VoiceBox TTS client
-│   └── profile.py       # Voice profile management
+│   └── tts.py           # VoiceBox TTS client
 └── ui/
     └── terminal.py      # Rich terminal dashboard
 ```
@@ -226,8 +261,8 @@ src/
 ## Test Scripts
 
 ```bash
-# Verify all components are installed
-python scripts/verify_setup.py
+# Test BlackHole audio loopback
+python scripts/test_blackhole.py
 
 # Test audio capture from BlackHole
 python scripts/test_audio_pipeline.py
@@ -237,15 +272,13 @@ python scripts/test_live_transcription.py
 
 # Test intent classification and response generation
 python scripts/test_brain.py
-
-# Test voice synthesis
-python scripts/test_voice.py
 ```
 
 ## Known Limitations
 
-- **Latency** — End-to-end response takes 15-30s on 24GB machines (intent ~5s + response ~5s + TTS ~15s). More RAM helps significantly.
-- **ASR restarts** — On memory-constrained machines, voxtral.c must stop during TTS to free GPU memory, causing a few seconds of deaf time after each response.
+- **Latency** — End-to-end response takes 15-30s on 24GB machines (intent ~2-5s + response ~3-5s + TTS ~8-15s). More RAM and a dedicated GPU machine help significantly.
+- **ASR quality** — Small model (4B) on constrained memory misses words, especially with low audio. The LLM prompts are tuned to infer meaning from noisy transcriptions using meeting context.
+- **ASR restarts** — On memory-constrained machines, voxtral.c stops during TTS to free GPU memory, causing a few seconds of deaf time after each response.
 - **Single speaker** — Optimized for 1-on-1 calls. Group calls would need diarization (not yet implemented).
 - **English only** — ASR and TTS are configured for English.
 - **macOS only** — Depends on BlackHole, Metal GPU acceleration, and macOS audio APIs.
@@ -254,10 +287,11 @@ python scripts/test_voice.py
 
 | Component | Technology | License |
 |-----------|-----------|---------|
-| ASR | [voxtral.c](https://github.com/nicholasgasior/voxtral.c) (Voxtral Realtime 4B) | Apache 2.0 |
-| LLM | [Ollama](https://ollama.com) + Qwen3 8B | Apache 2.0 |
+| ASR | [voxtral.c](https://github.com/antirez/voxtral.c) (Voxtral Realtime 4B) | Apache 2.0 |
+| LLM | [Ollama](https://ollama.com) + Llama 3.1 8B / Qwen3 8B | Various |
 | TTS | [VoiceBox](https://voicebox.sh) (Qwen3-TTS) | MIT |
-| Audio | [BlackHole](https://existential.audio/blackhole/) + sounddevice | MIT |
+| Audio | [BlackHole 16ch](https://existential.audio/blackhole/) + sounddevice | MIT |
+| UI | [Rich](https://github.com/Textualize/rich) terminal dashboard | MIT |
 | Language | Python 3.11+ with asyncio | — |
 
 ## License

@@ -7,6 +7,9 @@ import ollama
 
 logger = logging.getLogger(__name__)
 
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0
+
 
 class Responder:
     """Generates responses on behalf of the user using LLM."""
@@ -25,7 +28,33 @@ class Responder:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_sentences = max_sentences
-        self._client = ollama.Client(host=ollama_base_url)
+        self.ollama_base_url = ollama_base_url
+
+    def _call_ollama(self, messages: list[dict]) -> str:
+        """Call Ollama with retry logic for transient network errors."""
+        last_err = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                client = ollama.Client(host=self.ollama_base_url)
+                response = client.chat(
+                    model=self.ollama_model,
+                    messages=messages,
+                    options={
+                        "temperature": self.temperature,
+                        "num_predict": self.max_tokens,
+                    },
+                    think=False,
+                )
+                return response["message"]["content"].strip()
+            except (ConnectionError, OSError) as e:
+                last_err = e
+                logger.warning(
+                    "Ollama connection attempt %d/%d failed: %s",
+                    attempt, MAX_RETRIES, e,
+                )
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY)
+        raise last_err
 
     def generate(
         self,
@@ -64,26 +93,14 @@ Generate {self.user_name}'s response ({self.max_sentences} sentences max, spoken
         try:
             logger.info("Responder LLM input: %s", user_prompt[:300])
 
-            response = self._client.chat(
-                model=self.ollama_model,
+            raw = self._call_ollama(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                options={
-                    "temperature": self.temperature,
-                    "num_predict": self.max_tokens,
-                },
-                think=False,
             )
-
-            raw = response["message"]["content"].strip()
             elapsed = time.monotonic() - start
             logger.info("Responder LLM raw output (%0.1fs): %s", elapsed, repr(raw[:300]))
-
-            # Check for thinking content
-            if hasattr(response["message"], "thinking") and response["message"].thinking:
-                logger.info("Responder LLM thinking: %s", response["message"].thinking[:200])
 
             # Clean up: remove thinking tags, quotes, stage directions, etc.
             text = self._clean_response(raw)
@@ -104,6 +121,10 @@ Generate {self.user_name}'s response ({self.max_sentences} sentences max, spoken
         parts = [
             f"You are generating a spoken response on behalf of {self.user_name} in a live meeting.",
             f"Respond as if you ARE {self.user_name} speaking aloud. Use first person.",
+            "",
+            "IMPORTANT: The transcript comes from a small ASR model and may contain misheard words,",
+            "phonetic errors, or garbled text. Use the meeting context and conversation flow to infer",
+            "what was actually said. Respond to the intended meaning, not the literal transcription.",
             "",
             "Rules:",
             f"- Maximum {self.max_sentences} sentences",

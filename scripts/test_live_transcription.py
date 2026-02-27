@@ -1,13 +1,17 @@
-"""Phase 2 Test: Live transcription from BlackHole via voxtral.c.
+"""Phase 2 Test: Live transcription via voxtral.c.
 
-Captures audio from BlackHole, runs VAD to detect speech, feeds audio
-to voxtral.c for transcription, displays live transcript in terminal.
+Captures audio from microphone (or BlackHole if available), feeds to
+voxtral.c for transcription, displays live transcript in terminal.
 
 Usage:
-    # Set system output to BlackHole (or Meet + Agent), play audio, then:
-    python scripts/test_live_transcription.py
-    python scripts/test_live_transcription.py --no-vad    # skip VAD, transcribe everything
-    python scripts/test_live_transcription.py -I 1.0      # lower latency
+    # Use built-in mic (simplest — just speak or play Meet through speakers):
+    python scripts/test_live_transcription.py --no-vad
+
+    # Specify a device by name:
+    python scripts/test_live_transcription.py --no-vad --device mic
+
+    # Lower latency:
+    python scripts/test_live_transcription.py --no-vad -I 1.0
 """
 
 import argparse
@@ -20,8 +24,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.audio.capture import AudioCapture
+from src.audio.devices import find_device, find_blackhole, list_devices
 from src.asr.voxtral import VoxtralASR
-from src.asr.vad import VoiceActivityDetector
 from src.transcript.buffer import TranscriptBuffer
 
 logging.basicConfig(
@@ -31,17 +35,64 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def resolve_device(device_arg: str | None) -> int | None:
+    """Resolve --device argument to a device index."""
+    if device_arg is None:
+        # Auto: try BlackHole, fall back to default mic
+        return None
+
+    if device_arg.lower() == "mic":
+        idx = find_device("MacBook Pro Microphone", kind="input")
+        if idx is None:
+            # Fall back to any built-in mic
+            idx = find_device("Microphone", kind="input")
+        if idx is None:
+            print("ERROR: Could not find microphone device")
+            sys.exit(1)
+        return idx
+
+    if device_arg.lower() == "blackhole":
+        return find_blackhole("input")
+
+    # Try as device index
+    try:
+        return int(device_arg)
+    except ValueError:
+        pass
+
+    # Try as name substring
+    idx = find_device(device_arg, kind="input")
+    if idx is None:
+        print(f"ERROR: No input device matching '{device_arg}'")
+        print("\nAvailable devices:")
+        for d in list_devices():
+            if d["max_input_channels"] > 0:
+                print(f"  {d['index']}: {d['name']}")
+        sys.exit(1)
+    return idx
+
+
 async def run(args):
     print("\n=== Live Transcription Test ===\n")
 
+    # Resolve audio device
+    device_id = resolve_device(args.device)
+    if device_id is not None:
+        import sounddevice as sd
+        info = sd.query_devices(device_id)
+        print(f"Audio device: [{device_id}] {info['name']}")
+    else:
+        print("Audio device: auto (BlackHole or default mic)")
+
     # Initialize components
-    capture = AudioCapture(sample_rate=16000)
+    capture = AudioCapture(device=device_id, sample_rate=16000)
     asr = VoxtralASR(processing_interval=args.interval)
     transcript = TranscriptBuffer()
 
     vad = None
     if not args.no_vad:
         print("Loading VAD model...")
+        from src.asr.vad import VoiceActivityDetector
         vad = VoiceActivityDetector(silence_timeout=1.5)
         vad.load()
         vad.reset()
@@ -56,10 +107,13 @@ async def run(args):
 
     asr.on_transcript(on_text)
 
-    # Start components
+    # Start ASR first (model load takes ~30s)
     transcript.start_session()
-    await capture.start()
     await asr.start()
+    print("Waiting for voxtral model to load (~30s)...")
+    await asr.wait_ready()
+    print("Model loaded! Starting audio capture...\n")
+    await capture.start()
 
     print("Listening... (Ctrl+C to stop)\n")
     print("-" * 60)
@@ -115,6 +169,8 @@ def main():
                         help="Voxtral processing interval in seconds")
     parser.add_argument("--no-vad", action="store_true",
                         help="Disable VAD (transcribe all audio)")
+    parser.add_argument("--device", type=str, default="mic",
+                        help="Audio device: 'mic', 'blackhole', device index, or name substring (default: mic)")
     args = parser.parse_args()
 
     asyncio.run(run(args))

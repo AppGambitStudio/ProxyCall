@@ -2,8 +2,8 @@
 
 ## Date: 2026-02-26
 ## Attendees:
-- YourName (you) — Developer
-- Colleague — Project Manager
+- Dhaval (you) — Developer
+- Matt — Project Manager
 
 ## Agenda:
 1. Weekly progress update

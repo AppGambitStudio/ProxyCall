@@ -53,6 +53,7 @@ class Orchestrator:
         self._on_detection: list = []
         self._on_response: list = []
         self._on_latency: list = []
+        self._on_status: list = []
 
         # Components (initialized in start())
         self.capture: AudioCapture | None = None
@@ -98,6 +99,16 @@ class Orchestrator:
 
     def on_latency(self, cb):
         self._on_latency.append(cb)
+
+    def on_status(self, cb):
+        self._on_status.append(cb)
+
+    def _emit_status(self, msg: str):
+        for cb in self._on_status:
+            try:
+                cb(msg)
+            except Exception:
+                pass
 
     def _set_state(self, state: State):
         if self._muted and state != State.MUTED:
@@ -203,14 +214,17 @@ class Orchestrator:
 
         self.asr.on_transcript(on_asr_text)
 
-        # Start everything
+        # Start everything — ASR first (model load takes ~30s)
         self.transcript.start_session()
-        await self.capture.start()
         await self.asr.start()
+        logger.info("Waiting for ASR model to load...")
+        await self.asr.wait_ready()
+        await self.capture.start()
         await self.tts.start()
 
         self._running = True
         self._set_state(State.IDLE)
+        self._emit_status("All systems ready — waiting for colleague to speak...")
         logger.info("Orchestrator started — all components running")
 
     async def stop(self):
@@ -247,6 +261,7 @@ class Orchestrator:
                         "Silence after new speech (%.1fs), checking intent...",
                         time_since_speech,
                     )
+                    self._emit_status("Silence detected, analyzing intent...")
                     self._pending_check = True
                     self._last_checked_speech_time = self._last_speech_time
                     self._set_state(State.DETECTING)
@@ -268,11 +283,13 @@ class Orchestrator:
 
             # Intent classification (sync Ollama call — run in executor)
             loop = asyncio.get_running_loop()
+            self._emit_status("Classifying intent via LLM...")
             t0 = time.monotonic()
             intent = await loop.run_in_executor(
                 None, self.classifier.classify, recent_text, self.formatted_context
             )
             self.latency["intent"] = time.monotonic() - t0
+            self._emit_status(f"Intent done ({self.latency['intent']:.1f}s)")
 
             # Gate decision
             if force:
@@ -288,12 +305,14 @@ class Orchestrator:
                     pass
 
             if decision.action != Action.RESPOND or self._muted:
+                self._emit_status("Ready — you can speak")
                 self._set_state(State.IDLE)
                 self._pending_check = False
                 return
 
             # Generate response
             self._set_state(State.THINKING)
+            self._emit_status("Generating response via LLM...")
 
             style = "\n".join(f"- {s}" for s in self.meeting_ctx.communication_style)
             avoid = "\n".join(f"- {a}" for a in self.meeting_ctx.avoid)
@@ -310,6 +329,7 @@ class Orchestrator:
                 ),
             )
             self.latency["llm"] = time.monotonic() - t0
+            self._emit_status(f"Response ready ({self.latency['llm']:.1f}s)")
 
             for cb in self._on_response:
                 try:
@@ -323,14 +343,17 @@ class Orchestrator:
             try:
                 logger.info("Synthesizing TTS for: %s", response_text[:60])
                 # Stop ASR to free GPU memory for TTS and prevent feedback loop
+                self._emit_status("Stopping ASR for TTS...")
                 logger.info("Stopping ASR to free GPU for TTS...")
                 await self.asr.stop()
                 await asyncio.sleep(2)  # wait for GPU memory release
+                self._emit_status("Synthesizing voice...")
                 t0 = time.monotonic()
                 audio, sr = await loop.run_in_executor(
                     None, self.tts.synthesize_sync, response_text
                 )
                 self.latency["tts"] = time.monotonic() - t0
+                self._emit_status(f"TTS done ({self.latency['tts']:.1f}s), speaking...")
                 logger.info("TTS done in %.1fs, playing audio (%d samples, %dHz)",
                             self.latency["tts"], len(audio), sr)
 
@@ -355,11 +378,14 @@ class Orchestrator:
                 return
             finally:
                 # Restart ASR only after playback is done
+                self._emit_status("Restarting ASR...")
                 logger.info("Restarting ASR...")
                 await self.asr.start()
+                await self.asr.wait_ready()
                 # Mark current speech as checked to avoid re-triggering
                 self._last_checked_speech_time = self._last_speech_time
 
+            self._emit_status("Waiting for colleague to speak...")
             self._set_state(State.IDLE)
 
         except Exception:

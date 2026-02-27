@@ -37,11 +37,11 @@ def find_device(name: str, kind: str = "input") -> int | None:
 
 
 def find_blackhole(kind: str = "input") -> int:
-    """Find BlackHole 2ch device index. Raises if not found."""
-    idx = find_device("BlackHole 2ch", kind)
+    """Find BlackHole 16ch device index. Raises if not found."""
+    idx = find_device("BlackHole 16ch", kind)
     if idx is None:
         raise RuntimeError(
-            "BlackHole 2ch not found. Install with: brew install blackhole-2ch"
+            "BlackHole 16ch not found. Install with: brew install blackhole-16ch"
         )
     return idx
 

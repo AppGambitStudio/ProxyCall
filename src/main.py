@@ -89,6 +89,7 @@ async def run(args):
         orchestrator.on_detection(ui.on_detection)
         orchestrator.on_response(ui.on_response)
         orchestrator.on_latency(ui.on_latency)
+        orchestrator.on_status(ui.on_status)
 
     # Start orchestrator
     await orchestrator.start()

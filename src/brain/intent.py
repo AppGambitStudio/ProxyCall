@@ -7,11 +7,15 @@ question is "does this need a verbal response?"
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 import ollama
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0  # seconds
 
 
 @dataclass
@@ -35,8 +39,35 @@ class IntentClassifier:
     ):
         self.user_name = trigger_names[0] if trigger_names else "the user"
         self.ollama_model = ollama_model
+        self.ollama_base_url = ollama_base_url
         self.intent_temperature = intent_temperature
-        self._client = ollama.Client(host=ollama_base_url)
+
+    def _make_client(self) -> ollama.Client:
+        """Create a fresh ollama client."""
+        return ollama.Client(host=self.ollama_base_url)
+
+    def _call_ollama(self, messages: list[dict], temperature: float) -> str:
+        """Call Ollama with retry logic for transient network errors."""
+        last_err = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                client = self._make_client()
+                response = client.chat(
+                    model=self.ollama_model,
+                    messages=messages,
+                    options={"temperature": temperature},
+                    think=False,
+                )
+                return response["message"].content.strip()
+            except (ConnectionError, OSError) as e:
+                last_err = e
+                logger.warning(
+                    "Ollama connection attempt %d/%d failed: %s",
+                    attempt, MAX_RETRIES, e,
+                )
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY)
+        raise last_err
 
     def classify(self, transcript: str, meeting_context: str = "") -> IntentResult:
         """Classify whether the transcript needs a response."""
@@ -46,16 +77,19 @@ class IntentClassifier:
 
 This is a natural 1-on-1 conversation. Think about what a real person would reply to.
 
-needs_response = true:
-- Questions: "How are you?", "What's the status?", "Can you confirm?"
-- Requests: "Let me know", "Please share", "Walk me through"
-- Goodbyes and sign-offs: "Have a good evening", "Talk to you soon", "Take care" — always say goodbye back
-- Greetings: "Good morning", "Hey, how's it going?"
-- Expecting a reply: speaker paused and is waiting
+IMPORTANT: The transcript comes from a small ASR model and may contain misheard words, phonetic errors, or garbled text. Use the meeting context and conversation flow to infer what was actually said. For example "Naval" or "Dahwal" likely means "{self.user_name}", "a pie" might mean "API", etc. Focus on the intent behind the words, not the exact transcription.
 
-needs_response = false:
-- Mid-sentence or still talking (hasn't finished their thought)
-- Brief mid-conversation filler: "ok", "right", "uh huh", "got it", "I see"
+needs_response = true (ALWAYS respond to these):
+- Any question, direct or indirect
+- Greetings: "Good morning", "Hey", "How are you?"
+- Goodbyes and wrap-ups: "Talk soon", "Let's catch up Monday", "Have a good weekend", "See you", "Alright bye" — ALWAYS say goodbye back
+- Requests: "Let me know", "Please share", "Can you check"
+- Proposals or suggestions: "Let's do X", "How about Monday?", "We could try..."
+- Expecting a reply: speaker finished talking and is waiting
+
+needs_response = false (stay silent):
+- Speaker is clearly mid-sentence and still talking
+- Very brief filler while the other person continues: "ok", "uh huh", "right"
 
 {f"Context: {meeting_context}" if meeting_context else ""}
 
@@ -63,20 +97,15 @@ Reply with ONLY valid JSON:
 {{"needs_response": true/false, "confidence": 0.0-1.0, "summary": "what to respond to"}}"""
 
         try:
-            user_msg = f"Transcript:\n{transcript}"
             logger.info("Intent input: %s", transcript[:200])
 
-            response = self._client.chat(
-                model=self.ollama_model,
+            raw = self._call_ollama(
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_msg},
+                    {"role": "user", "content": f"Transcript:\n{transcript}"},
                 ],
-                options={"temperature": self.intent_temperature},
-                think=False,
+                temperature=self.intent_temperature,
             )
-
-            raw = response["message"].content.strip()
             logger.info("Intent output: %s", raw[:300])
 
             json_match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -98,7 +127,7 @@ Reply with ONLY valid JSON:
             )
 
         except Exception as e:
-            logger.error("Intent classification failed: %s", e)
+            logger.error("Intent classification failed: %s: %s", type(e).__name__, e)
             return IntentResult(
                 needs_response=True,
                 confidence=0.5,
